@@ -106,6 +106,7 @@ const int HEATER_DECREASE_DUTY = 3;
 #define STATE_CHARGE 2
 #define STATE_ROASTING 3
 #define STATE_COOLING 4
+#define FIRST_CRACK_MARK 99
 int currentState = -1;
 
 int frame = 0;
@@ -296,18 +297,15 @@ void stateInit()
   
   fanSpeedControl();
   
-  if (M5.BtnA.wasPressed()) {
+  if (M5.BtnA.wasReleased()) {
     targetTemperature--;
   }
 
-  if (M5.BtnB.wasReleased())
-    buttonReleased = true;
-
-  if (buttonReleased and M5.BtnB.pressedFor(LONG_PRESSED_DURATION)) {
+  if (M5.BtnB.wasReleased()) {
     statePreheat();
   }
   
-  if (M5.BtnC.wasPressed()) {
+  if (M5.BtnC.wasReleased()) {
     targetTemperature++;
   }
 }
@@ -360,14 +358,14 @@ void statePreheat()
 
   heaterTemperatureControl();
 
-  if (M5.BtnA.wasPressed()) {
+  if (M5.BtnA.wasReleased()) {
     stateInit();
   }
 
   if (fabs(targetTemperature - insideTemperature) < 4 and fabs(rateOfRise) < 10) {
     readyToCharge = true;
     // ready to rasting
-    if (M5.BtnB.wasPressed()) {
+    if (M5.BtnB.wasReleased()) {
       stateCharge();
     }
   }
@@ -440,11 +438,34 @@ void displayCharge()
 int selector;
 const int HEATER_SELECTED = 100;
 const int FAN_SELECTED = 222;
+unsigned int firstCrackTime, endTime;
+int firstCrackMinutes, firstCrackSeconds, endMinutes, endSeconds;
+float firstCrackTemperature, endTemperature;
+bool hadFirstCrack;
+
+void firstCrackMark() {
+  hadFirstCrack = true;
+  firstCrackTime = millis();
+  firstCrackMinutes = (firstCrackTime - startTime) / 60000;
+  firstCrackSeconds = ((firstCrackTime - startTime) / 1000) % 60;
+  firstCrackTemperature = outsideTemperature;
+}
+
+void endTimeMark() {
+  endTime = millis();
+  endMinutes = (endTime - startTime) / 60000;
+  endSeconds = ((endTime - startTime) / 1000) % 60;
+  endTemperature = outsideTemperature;
+}
+
 void stateRoasting()
 {
   if (currentState != STATE_ROASTING) {
     currentState = STATE_ROASTING;
-    airTemperatureRateOfRise = 20.0;
+    airTemperatureRateOfRise = 25.0;
+    hadFirstCrack = false;
+    buttonReleased = true;
+
     resetTemperatureControl();
   }
   
@@ -452,7 +473,7 @@ void stateRoasting()
   targetTemperatureControl();
   heaterTemperatureControl();
 
-  if (M5.BtnB.wasPressed()) {
+  if (M5.BtnB.wasReleased()) {
     if (selector == HEATER_SELECTED) {
       selector = FAN_SELECTED;
     } else {
@@ -460,7 +481,7 @@ void stateRoasting()
     }
   }
 
-  if (M5.BtnA.wasPressed()) {
+  if (M5.BtnA.wasReleased()) {
     if (selector == HEATER_SELECTED) {
       airTemperatureRateOfRise -= 1.0;
     } else {
@@ -468,7 +489,7 @@ void stateRoasting()
     }
   }
 
-  if (M5.BtnC.wasPressed()) {
+  if (M5.BtnC.wasReleased()) {
     if (selector == HEATER_SELECTED) {
       airTemperatureRateOfRise += 1.0;
     } else {
@@ -476,9 +497,21 @@ void stateRoasting()
     }
   }
 
-  if (M5.BtnB.pressedFor(2000)) {
-    stateCooling();
+  fanLevel = min(30, max(1, fanLevel));
+
+  if (M5.BtnB.wasReleased()) {
+    buttonReleased = true;
   }
+  
+  if (M5.BtnB.pressedFor(2000) and buttonReleased) {
+    buttonReleased = false;
+    
+    if (!hadFirstCrack) {
+      firstCrackMark();
+    } else {
+      stateCooling();
+    }
+  } 
 }
 
 void displayRoasting()
@@ -490,35 +523,44 @@ void displayRoasting()
   M5.Lcd.setCursor(0, 0);
   M5.Lcd.setTextColor(RED, BLACK);
   M5.Lcd.setTextSize(3);
-  M5.Lcd.printf("ROASTING!  ");
+  M5.Lcd.printf("ROASTING! "); // 10
   M5.Lcd.setTextColor(ORANGE, BLACK);
-  M5.Lcd.printf("%2d:%02d\n", minutes, seconds);
+  M5.Lcd.printf(" %2d:%02d\n", minutes, seconds);
+  
+  // 17 characters
+  M5.Lcd.setTextColor(ORANGE, BLACK);
+  if (hadFirstCrack) {
+    float devPercentage = (millis() - firstCrackTime) * 100.0 / (firstCrackTime - startTime);
+    M5.Lcd.printf("FC%2d:%02d DEV %4.1f%%\n", firstCrackMinutes, firstCrackSeconds, devPercentage);
+  } else {
+    M5.Lcd.println();
+  }
   
   M5.Lcd.setTextColor(WHITE, BLACK);
   M5.Lcd.setTextSize(3);
   if (fanLevel == 30) {
-    M5.Lcd.printf("FAN    MAX\n");
+    M5.Lcd.printf("FAN    MAX       \n");
   } else {
-    M5.Lcd.printf("FAN     %2d\n", fanLevel);
+    M5.Lcd.printf("FAN     %2d/30    \n", fanLevel);
   }
 
   if (heaterDuty == 0) {
     M5.Lcd.printf("HEATER OFF %3.0f\n", airTemperatureRateOfRise);
   } else {
-    M5.Lcd.printf("HEATER %3.0f C/m\n", airTemperatureRateOfRise);
+    M5.Lcd.printf("HEATER %3.0f c/m\n", airTemperatureRateOfRise);
   }
   
   M5.Lcd.setTextColor(RED, BLACK);
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Air Temperature\n");
   M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2f => %3.0f\n", insideTemperature, targetTemperature);
+  M5.Lcd.printf("%6.2fc > %3.0f\n", insideTemperature, targetTemperature);
   
   M5.Lcd.setTextColor(BLUE, BLACK);
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Bean Temperature\n");
   M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2fc [%3.0f]\n", outsideTemperature, rateOfRise);
+  M5.Lcd.printf("%6.2fc R%4.0f\n", outsideTemperature, rateOfRise);
   
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(WHITE, BLACK);
@@ -547,6 +589,8 @@ void stateCooling()
     fanLevel = 20;
     startCoolingTime = millis();
     readyForReset = false;
+
+    endTimeMark();
   }
 
   heaterLevel = 0;
@@ -554,20 +598,25 @@ void stateCooling()
   
   fanSpeedControl();
 
+  if (M5.BtnB.wasReleased())
+    buttonReleased = true;
+
   if (fabs(rateOfRise) < 7 and millis() - startCoolingTime > 20000) {
     // ready for next roast
     readyForReset = true;
     
-    if (M5.BtnB.pressedFor(LONG_PRESSED_DURATION)) {
-      stateInit();
+    if (M5.BtnB.wasReleased()) {
+      ESP.restart();
     }
   }
 
-  if (M5.BtnA.wasPressed()) 
+  if (M5.BtnA.wasReleased()) 
     fanLevel--;
 
-  if (M5.BtnC.wasPressed())
+  if (M5.BtnC.wasReleased())
     fanLevel++;
+
+  fanLevel = min(30, max(1, fanLevel));
 }
 
 void displayCooling()
@@ -578,22 +627,31 @@ void displayCooling()
   M5.Lcd.setTextColor(CYAN, BLACK);
   M5.Lcd.println("COOLING!!");
   M5.Lcd.println();
-  M5.Lcd.println();
 
   M5.Lcd.setTextColor(BLUE, BLACK);
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Bean Temperature\n");
-  M5.Lcd.setTextSize(5);
+  M5.Lcd.setTextSize(4);
   M5.Lcd.printf("%6.2fC\n", outsideTemperature);
-
-  M5.Lcd.println();
-  M5.Lcd.println();
-  M5.Lcd.setTextColor(BLACK, YELLOW);
+  
   M5.Lcd.setTextSize(3);
-  if (readyForReset)
-    M5.Lcd.printf("  -   RESET  +   ");
-  else
+  M5.Lcd.setTextColor(ORANGE, BLACK);
+  M5.Lcd.printf("FC %2d:%02d @ %5.1fc\n", firstCrackMinutes, firstCrackSeconds, firstCrackTemperature);
+  M5.Lcd.setTextColor(RED, BLACK);
+  M5.Lcd.printf("END%2d:%02d @ %5.1fc\n", endMinutes, endSeconds, endTemperature);
+  float devPercentage = (endTime - firstCrackTime) * 100.0 / (firstCrackTime - startTime);
+  M5.Lcd.setTextColor(ORANGE, BLACK);
+  M5.Lcd.printf("DEV %6.2f%%\n", devPercentage);
+  
+  M5.Lcd.setTextSize(3);
+  M5.Lcd.println();
+  if (readyForReset) {
+    M5.Lcd.setTextColor(ORANGE, BLACK);
+    M5.Lcd.printf("      RESET      ");
+  } else {
+    M5.Lcd.setTextColor(BLACK, YELLOW);
     M5.Lcd.printf("  -    FAN   +   ");
+  }
 }
 
 
@@ -640,6 +698,9 @@ void modbusPolling()
         break;
       case STATE_COOLING:
         stateCooling();
+        break;
+      case FIRST_CRACK_MARK:
+        firstCrackMark();
         break;
     }
   }
@@ -810,6 +871,8 @@ void setup() {
 
 void loop()
 {
+  fpsCheck();
+  
   modbusPolling();
   
   runState();
