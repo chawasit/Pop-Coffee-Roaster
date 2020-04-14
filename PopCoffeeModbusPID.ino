@@ -3,15 +3,15 @@
 #include <U8g2lib.h>
 
 
-int colourToNumber(int r, int g, int b) {
+int colorToNumber(int r, int g, int b) {
   return (r << 16) + (g << 8) + (b);
 }
 
 #define LONG_PRESSED_DURATION 2000
-const int ORANGE = colourToNumber(255, 128, 0);
-const int PURPLE = colourToNumber(127, 0, 255);
-const int YELLOW = colourToNumber(255, 255, 0);
-const int CYAN = colourToNumber(0, 255, 255);
+const int ORANGE = colorToNumber(255, 128, 0);
+const int PURPLE = colorToNumber(127, 0, 255);
+const int YELLOW = colorToNumber(255, 255, 0);
+const int CYAN = colorToNumber(0, 255, 255);
 
 #include <WiFi.h>
 
@@ -62,7 +62,7 @@ const int fanDutyResolution = 12;
 
 // Heater Config
 const int heaterPowerPin = 2;
-const int heaterPwmChannel = 1;
+const int heaterPwmChannel = 3;
 const int heaterPwmFrequency = 4096;
 const int heaterDutyResolution = 12;
 
@@ -362,7 +362,7 @@ void statePreheat()
     stateInit();
   }
 
-  if (fabs(targetTemperature - insideTemperature) < 4 and fabs(rateOfRise) < 10) {
+  if ((fabs(targetTemperature - insideTemperature) < 4 and fabs(rateOfRise) < 10) or readyToCharge) {
     readyToCharge = true;
     // ready to rasting
     if (M5.BtnB.wasReleased()) {
