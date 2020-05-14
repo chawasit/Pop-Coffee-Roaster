@@ -2,16 +2,19 @@
 #include <DallasTemperature.h>
 #include <U8g2lib.h>
 
-
-int colorToNumber(int r, int g, int b) {
+uint16_t colorToNumber(uint16_t r, uint16_t g, uint16_t b) {
   return (r << 16) + (g << 8) + (b);
 }
 
 #define LONG_PRESSED_DURATION 2000
-const int ORANGE = colorToNumber(255, 128, 0);
-const int PURPLE = colorToNumber(127, 0, 255);
-const int YELLOW = colorToNumber(255, 255, 0);
-const int CYAN = colorToNumber(0, 255, 255);
+const uint16_t PINK = 0xfbe4;
+const uint16_t ORANGE = 0xfbe4;
+const uint16_t PURPLE = colorToNumber(127, 0, 255);
+const uint16_t VIOLET = 0xa254;
+const uint16_t YELLOW = 0xff80;
+const uint16_t BROWN = 0x8e7a6f;
+const uint16_t CYAN = 0x51d;
+const uint16_t GRAY = 0x7bef;
 
 #include <WiFi.h>
 
@@ -30,12 +33,19 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
 // arrays to hold device addresses
-DeviceAddress insideThermometer, outsideThermometer;
-
+// inbean              exhaust
+// 3BE6BD5D06D84CC5    3B4E8E5D06D82C97
+//
+// air heater 1     air heater 2
+// 3B6AB45D06D80CE7    3B0DA35D06D82CAF
+DeviceAddress airThermometer1 = {0x3B, 0x6A, 0xB4, 0x5D, 0x06, 0xD8, 0x0C, 0xE7};
+DeviceAddress airThermometer2 = {0x3B, 0x0D, 0xA3, 0x5D, 0x06, 0xD8, 0x2C, 0xAF};
+DeviceAddress beanThermometer    = {0x3B, 0xE6, 0xBD, 0x5D, 0x06, 0xD8, 0x4C, 0xC5};
+DeviceAddress exhaustThermometer = {0x3B, 0x4E, 0x8E, 0x5D, 0x06, 0xD8, 0x2C, 0x97};
 
 /* data array for modbus network sharing
  *  
- *  2 = insideTemp
+ *  2 = airTemp
  *  3 = outsideTemp
  *  4 = heater level
  *  5 = fan level
@@ -70,11 +80,18 @@ const int fanMaxDuty = (1 << fanDutyResolution) - 1;
 const int heaterMaxDuty = (1 << heaterDutyResolution) - 1;
 
 // sensor variable
-float insideTemperature = 0.0;
-float outsideTemperature = 0.0;
-float newInsideTemperature = 0.0;
-float newOutsideTemperature = 0.0;
-const float acceptableRangeOfTemperatureChange = 80;
+float airTemperature = 0.0;
+float airTemperature1 = 0.0;
+float airTemperature2 = 0.0;
+
+float beanTemperature = 0.0;
+float exhaustTemperature = 0.0;
+
+float newAirTemperature1 = 0.0;
+float newAirTemperature2 = 0.0;
+float newBeanTemperature = 0.0;
+float newExhaustTemperature = 0.0;
+const float acceptableRangeOfTemperatureChange = 100;
 
 // global config
 int fanLevel, heaterLevel, fanDuty, heaterDuty;
@@ -130,7 +147,7 @@ void rateOfRiseCode(void *parameter) {
   xLastWakeTime = xTaskGetTickCount();
 
   for (int i = 0; i < 13; i++) {
-    temperatureHistory[i] = outsideTemperature;
+    temperatureHistory[i] = beanTemperature;
     temperatureTimestamp[i] = millis() - 999999999;
   }
   
@@ -141,7 +158,7 @@ void rateOfRiseCode(void *parameter) {
     temperatureHistoryIndex = temperatureHistoryIndex % 7;
 
     temperatureTimestamp[temperatureHistoryIndex] = currentTimestamp;
-    temperatureHistory[temperatureHistoryIndex] = outsideTemperature;
+    temperatureHistory[temperatureHistoryIndex] = beanTemperature;
 
     int pastTemperatureIndex = (temperatureHistoryIndex + 1) % 7;
     float pastTemperature = temperatureHistory[pastTemperatureIndex];
@@ -149,7 +166,7 @@ void rateOfRiseCode(void *parameter) {
     
     if (currentTimestamp - pastTemperatureTimestamp > 0) {
       double newRateOfRise = (
-            (outsideTemperature - pastTemperature) * 1000 
+            (beanTemperature - pastTemperature) * 1000 
             / 
             (currentTimestamp - pastTemperatureTimestamp)
           );
@@ -170,26 +187,40 @@ void rateOfRiseCode(void *parameter) {
 
 void sensorsReadingCode(void *parameter) {
   TickType_t xLastWakeTime;
-  const TickType_t xFrequency = pdMS_TO_TICKS(250);
+  const TickType_t xFrequency = pdMS_TO_TICKS(200);
 
   xLastWakeTime = xTaskGetTickCount();
   
-  insideTemperature = sensors.getTempC(insideThermometer);
-  outsideTemperature = sensors.getTempC(outsideThermometer);
+  sensors.requestTemperatures();
+  
+  airTemperature1 = sensors.getTempC(airThermometer1);
+  airTemperature2 = sensors.getTempC(airThermometer2);
+  beanTemperature = sensors.getTempC(beanThermometer);
+  exhaustTemperature = sensors.getTempC(exhaustThermometer);
   
   for(;;) {
     sensors.requestTemperatures();
-    
-    newInsideTemperature = sensors.getTempC(insideThermometer);
-    if (!isnan(newInsideTemperature) and fabs(newInsideTemperature - insideTemperature) <= acceptableRangeOfTemperatureChange) {
-//      insideTemperature = (insideTemperature + newInsideTemperature) / 2;
-      insideTemperature = newInsideTemperature;
+
+    newAirTemperature1 = sensors.getTempC(airThermometer1);
+    if (!isnan(newAirTemperature1) and fabs(newAirTemperature1 - airTemperature1) <= acceptableRangeOfTemperatureChange) {
+      airTemperature1 = newAirTemperature1;
     }
     
-    newOutsideTemperature = sensors.getTempC(outsideThermometer);
-    if (!isnan(newOutsideTemperature) and fabs(newOutsideTemperature - outsideTemperature) <= acceptableRangeOfTemperatureChange) {
-//      outsideTemperature = (outsideTemperature + newOutsideTemperature) / 2;
-      outsideTemperature = newOutsideTemperature;
+    newAirTemperature2 = sensors.getTempC(airThermometer2);
+    if (!isnan(newAirTemperature2) and fabs(newAirTemperature2 - airTemperature2) <= acceptableRangeOfTemperatureChange) {
+      airTemperature2 = newAirTemperature2;
+    }
+
+    airTemperature = (airTemperature1 + airTemperature2) / 2;
+    
+    newBeanTemperature = sensors.getTempC(beanThermometer);
+    if (!isnan(newBeanTemperature) and fabs(newBeanTemperature - beanTemperature) <= acceptableRangeOfTemperatureChange) {
+      beanTemperature = newBeanTemperature;
+    }
+
+    newExhaustTemperature = sensors.getTempC(exhaustThermometer);
+    if (!isnan(newExhaustTemperature) and fabs(newExhaustTemperature - exhaustTemperature) <= acceptableRangeOfTemperatureChange) {
+      exhaustTemperature = newExhaustTemperature;
     }
 
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
@@ -200,7 +231,7 @@ void sensorsReadingCode(void *parameter) {
 // State
 void setPWMPower()
 {
-  if (insideTemperature > 300) {
+  if (airTemperature > 300) {
     ledcWrite(heaterPwmChannel, 0);
     ledcWrite(fanPwmChannel, fanMaxDuty); 
   } else {
@@ -233,6 +264,10 @@ void targetTemperatureControl() {
     
     lastHeaterRoRStep = millis();
   }
+
+  if (fabs(airTemperatureRateOfRise) == 0.0) {
+    lastHeaterRoRStep = millis();
+  }
 }
 
 void heaterTemperatureControl()
@@ -243,8 +278,8 @@ void heaterTemperatureControl()
   } else {
     unsigned int timeSinceLastStateChange = millis() - lastHeaterStateChanged;
 
-    int temperatureError = targetTemperature - insideTemperature;
-    if (insideTemperature < targetTemperature) { // need more power
+    int temperatureError = targetTemperature - airTemperature;
+    if (airTemperature < targetTemperature) { // need more power
       if (heaterState == HEATER_STAY) { // turn on heater if it turn off
         heaterState = HEATER_RUN;
         lastHeaterStateChanged = millis();
@@ -258,7 +293,7 @@ void heaterTemperatureControl()
       if (heaterState == HEATER_RUN) {
         heaterState = HEATER_STAY;
         lastHeaterStateChanged = millis();
-      } else if (heaterState == HEATER_STAY and timeSinceLastStateChange > 3000) { // decrease base heater duty if it continue off for 2s.
+      } else if (heaterState == HEATER_STAY and timeSinceLastStateChange > 2000) { // decrease base heater duty if it continue off for 2s.
         lastHeaterStateChanged = millis();
         baseHeaterDuty += -1;
       }
@@ -266,9 +301,9 @@ void heaterTemperatureControl()
       heaterDuty =  baseHeaterDuty;
     }
 
-    baseHeaterDuty = max(0, min(50, baseHeaterDuty)); 
+    baseHeaterDuty = max(-40, min(70, baseHeaterDuty)); 
     heaterDuty += 160;
-    heaterDuty = max(160, min(210, heaterDuty)); 
+    heaterDuty = max(120, min(230, heaterDuty)); 
   }
 }
 
@@ -278,6 +313,8 @@ void heaterTemperatureControl()
  * heater turned off
  */
 bool buttonReleased;
+unsigned int lastHot = millis();
+
 void stateInit()
 {
   if (currentState != STATE_INIT) {
@@ -289,10 +326,13 @@ void stateInit()
   heaterDuty = 0;
   baseHeaterDuty = 0;
 
-  if (insideTemperature > 50) {
+  if (airTemperature > 50) {
+    lastHot = millis();
     fanLevel = 20;
   } else {
-    fanLevel = 0;
+    if (millis() - lastHot > 2000) {
+      fanLevel = 0;
+    }
   }
   
   fanSpeedControl();
@@ -356,13 +396,14 @@ void statePreheat()
     resetTemperatureControl();
   }
 
+  fanSpeedControl();
   heaterTemperatureControl();
 
   if (M5.BtnA.wasReleased()) {
     stateInit();
   }
 
-  if ((fabs(targetTemperature - insideTemperature) < 4 and fabs(rateOfRise) < 10) or readyToCharge) {
+  if ((fabs(targetTemperature - airTemperature) < 4 and fabs(rateOfRise) < 10) or readyToCharge) {
     readyToCharge = true;
     // ready to rasting
     if (M5.BtnB.wasReleased()) {
@@ -385,7 +426,7 @@ void displayPreheat()
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Air Temperature\n");
   M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2f => %3.0f\n", insideTemperature, targetTemperature);
+  M5.Lcd.printf("%6.2f => %3.0f\n", airTemperature, targetTemperature);
 
   M5.Lcd.println();
   M5.Lcd.println();
@@ -404,17 +445,62 @@ void displayPreheat()
  * go to roasing state
  */
 unsigned int startTime;
+
+#define MAX_HISTORY 1200 // 20 min roasted log every 1 sec = 600 points
+float airTemperatureProfile[MAX_HISTORY];
+float beanTemperatureProfile[MAX_HISTORY];
+int8_t rateOfRiseProfile[MAX_HISTORY];
+uint8_t fanProfile[MAX_HISTORY];
+int profileCounter;
+unsigned int logTimeProfile[MAX_HISTORY];
+unsigned int lastLogProfile;
+int lastFanLevel;
+float lastRateOfRise;
+
+void logProfile(bool force = false) {
+  if (profileCounter > 2000)
+    return;
+
+  unsigned int currentTime = millis();
+  unsigned int timeSinceLastLog = currentTime - lastLogProfile;
+  
+  bool event = (lastFanLevel != fanLevel) or (lastRateOfRise != airTemperatureRateOfRise);
+  
+  if (force or timeSinceLastLog > 1000) {
+    airTemperatureProfile[profileCounter] = airTemperature;
+    beanTemperatureProfile[profileCounter] = beanTemperature;
+    rateOfRiseProfile[profileCounter] = airTemperatureRateOfRise;
+    fanProfile[profileCounter] = fanLevel;
+    logTimeProfile[profileCounter] = currentTime - startTime;
+    
+    lastFanLevel = fanLevel;
+    lastRateOfRise = airTemperatureRateOfRise;
+
+    profileCounter++;
+
+    
+    if (timeSinceLastLog > 1000) {
+      lastLogProfile = currentTime;
+    }
+  } 
+
+  if (force) {
+    lastLogProfile = currentTime;
+  }
+}
+
 void stateCharge()
 {
   if (currentState != STATE_CHARGE) {
     currentState = STATE_CHARGE;
     startTime = millis();
-
+    logProfile(true);
     resetTemperatureControl();
   }
 
   heaterTemperatureControl();
-
+  logProfile();
+  
   // wait until bean temperature rise up
   if (rateOfRise > 0 and millis() - startTime > 3000) {
     stateRoasting();
@@ -448,14 +534,14 @@ void firstCrackMark() {
   firstCrackTime = millis();
   firstCrackMinutes = (firstCrackTime - startTime) / 60000;
   firstCrackSeconds = ((firstCrackTime - startTime) / 1000) % 60;
-  firstCrackTemperature = outsideTemperature;
+  firstCrackTemperature = beanTemperature;
 }
 
 void endTimeMark() {
   endTime = millis();
   endMinutes = (endTime - startTime) / 60000;
   endSeconds = ((endTime - startTime) / 1000) % 60;
-  endTemperature = outsideTemperature;
+  endTemperature = beanTemperature;
 }
 
 void stateRoasting()
@@ -472,6 +558,7 @@ void stateRoasting()
   fanSpeedControl();
   targetTemperatureControl();
   heaterTemperatureControl();
+  logProfile();
 
   if (M5.BtnB.wasReleased()) {
     if (selector == HEATER_SELECTED) {
@@ -554,13 +641,13 @@ void displayRoasting()
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Air Temperature\n");
   M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2fc > %3.0f\n", insideTemperature, targetTemperature);
+  M5.Lcd.printf("%6.2fc > %3.0f\n", airTemperature, targetTemperature);
   
   M5.Lcd.setTextColor(BLUE, BLACK);
   M5.Lcd.setTextSize(3);
   M5.Lcd.printf("Bean Temperature\n");
   M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2fc R%4.0f\n", outsideTemperature, rateOfRise);
+  M5.Lcd.printf("%6.2fc R%4.0f\n", beanTemperature, rateOfRise);
   
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(WHITE, BLACK);
@@ -582,6 +669,7 @@ void displayRoasting()
  */
 unsigned int startCoolingTime;
 bool readyForReset;
+bool showProfile;
 void stateCooling()
 {
   if (currentState != STATE_COOLING) {
@@ -591,6 +679,9 @@ void stateCooling()
     readyForReset = false;
 
     endTimeMark();
+    logProfile(true);
+
+    showProfile = false;
   }
 
   heaterLevel = 0;
@@ -616,63 +707,218 @@ void stateCooling()
   if (M5.BtnC.wasReleased())
     fanLevel++;
 
+  if (M5.BtnC.pressedFor(2000)) {
+    showProfile = showProfile ? false : true;
+    while(M5.BtnC.isPressed()) {
+      vTaskDelay(100);
+      M5.update();
+    }
+  }
+
   fanLevel = min(30, max(1, fanLevel));
 }
 
+bool profileRendered;
 void displayCooling()
 {
-  M5.Lcd.setCursor(0, 0);
-  
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(CYAN, BLACK);
-  M5.Lcd.println("COOLING!!");
-  M5.Lcd.println();
+  if (showProfile) {
+    if (!profileRendered) {
+      M5.Lcd.fillScreen(BLACK);
+      profileRendered = true;
+    
+      M5.Lcd.setCursor(1, 1);
+      M5.Lcd.setTextSize(3);
+      M5.Lcd.setTextColor(WHITE, BLACK);
+      M5.Lcd.println("Roast Profile");
 
-  M5.Lcd.setTextColor(BLUE, BLACK);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.printf("Bean Temperature\n");
-  M5.Lcd.setTextSize(4);
-  M5.Lcd.printf("%6.2fC\n", outsideTemperature);
-  
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setTextColor(ORANGE, BLACK);
-  M5.Lcd.printf("FC %2d:%02d @ %5.1fc\n", firstCrackMinutes, firstCrackSeconds, firstCrackTemperature);
-  M5.Lcd.setTextColor(RED, BLACK);
-  M5.Lcd.printf("END%2d:%02d @ %5.1fc\n", endMinutes, endSeconds, endTemperature);
-  float devPercentage = (endTime - firstCrackTime) * 100.0 / (firstCrackTime - startTime);
-  M5.Lcd.setTextColor(ORANGE, BLACK);
-  M5.Lcd.printf("DEV %6.2f%%\n", devPercentage);
-  
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.println();
-  if (readyForReset) {
-    M5.Lcd.setTextColor(ORANGE, BLACK);
-    M5.Lcd.printf("      RESET      ");
+      // draw dev area
+      unsigned int fcDuration = firstCrackTime - startTime; 
+      unsigned int endDuration = endTime - startTime; 
+      int fcX = 30 + ((260 * fcDuration / endDuration));
+      M5.Lcd.fillRect(fcX, 30, 290 - fcX, 180, BROWN);
+      
+      // draw graph legend
+      M5.Lcd.drawLine(30, 30, 290, 30, GRAY); // 300
+      M5.Lcd.drawLine(30, 60, 290, 60, GRAY); // 250
+      M5.Lcd.drawLine(30, 90, 290, 90, GRAY); // 200
+      M5.Lcd.drawLine(30, 120, 290, 120, GRAY); // 150
+      M5.Lcd.drawLine(30, 150, 290, 150, GRAY); // 100
+
+      // Right Axis line
+      M5.Lcd.drawLine(30, 210 - 60, 290, 210 - 60, GRAY); // 30
+      M5.Lcd.drawLine(30, 210 - 40, 290, 210 - 40, GRAY); // 20
+      M5.Lcd.drawLine(30, 210 - 20, 290, 210 - 20, GRAY); // 10
+
+      // Graph side
+      M5.Lcd.drawLine(30, 30, 30, 210, WHITE);
+      M5.Lcd.drawLine(30, 210, 290, 210, WHITE);
+      M5.Lcd.drawLine(290, 210, 290, 30, WHITE);
+
+      // Left Axis
+      M5.Lcd.setTextColor(WHITE, BLACK);
+      
+      M5.Lcd.setTextSize(1);
+      M5.Lcd.setCursor(5, 30 -3);
+      M5.Lcd.print("300");
+      M5.Lcd.setCursor(5, 60 - 3);
+      M5.Lcd.print("250");
+      M5.Lcd.setCursor(5, 90 - 3);
+      M5.Lcd.print("200");
+      M5.Lcd.setCursor(5, 120 - 3);
+      M5.Lcd.print("150");
+      M5.Lcd.setCursor(5, 150 - 3);
+      M5.Lcd.print("100");
+      M5.Lcd.setCursor(5, 180 - 3);
+      M5.Lcd.print(" 50");
+
+      // Right Axis
+      M5.Lcd.setTextSize(1);
+      M5.Lcd.setCursor(290 + 5, 210 - 60 - 3);
+      M5.Lcd.print("30");
+      M5.Lcd.setCursor(290 + 5, 210 - 40 - 3);
+      M5.Lcd.print("20");
+      M5.Lcd.setCursor(290 + 5, 210 - 20 - 3);
+      M5.Lcd.print("10");
+//      M5.Lcd.setCursor(290 + 5, 220 - 3);
+//      M5.Lcd.print(" 0");
+
+
+      // Bottom
+      M5.Lcd.setCursor(30 - 10, 210 + 3);
+      M5.Lcd.print("0:00");
+
+      unsigned int timeStep = fcDuration / 3;
+      for (int i = 1; i <= 3; i++) {
+        int tX = 30 + ((260 * timeStep * i / endDuration));
+        M5.Lcd.setCursor(tX - 7, 210 + 3);
+        int minutes = (timeStep * i) / 60000;
+        int seconds = ((timeStep * i) / 1000 ) % 60;
+        M5.Lcd.printf("%d:%02d", minutes, seconds);
+      }
+
+      // Draw End Time
+      M5.Lcd.setCursor(290 - 7, 210 + 3);
+      M5.Lcd.setTextColor(PURPLE, BLACK);
+      M5.Lcd.printf("%d:%02d", endMinutes, endSeconds);
+
+      // Draw First Crack Time
+      M5.Lcd.setCursor(fcX - 7, 210 + 3);
+      M5.Lcd.setTextSize(1);
+      M5.Lcd.setTextColor(ORANGE, BLACK);
+      M5.Lcd.printf("%d:%02d", firstCrackMinutes, firstCrackSeconds);
+
+      M5.Lcd.setTextSize(1);
+      M5.Lcd.setTextColor(RED, BLACK);
+      int eTY = 210 - ((180 * airTemperatureProfile[profileCounter - 1] / 300));
+      M5.Lcd.setCursor(290 + 5, eTY - 3);
+      M5.Lcd.printf("%.0f", airTemperatureProfile[profileCounter - 1]);
+
+      M5.Lcd.setTextColor(BLUE, BLACK);
+      eTY = 210 - ((180 * beanTemperatureProfile[profileCounter - 1] / 300));
+      M5.Lcd.setCursor(290 + 5, eTY - 3);
+      M5.Lcd.printf("%.0f", beanTemperatureProfile[profileCounter - 1]);
+      
+      // draw profile
+      for (int i = 0; i < profileCounter - 1; i++) {
+        int sX = 30 + ((260 * logTimeProfile[i] / endDuration));
+        int sY = 210 - ((180 * airTemperatureProfile[i] / 300));
+        int eX = 30 + ((260 * logTimeProfile[i + 1] / endDuration));
+        int eY = 210 - ((180 * airTemperatureProfile[i + 1] / 300));
+        M5.Lcd.drawLine(sX, sY, eX, eY, RED);
+        M5.Lcd.drawLine(sX, sY+1, eX, eY+1, RED);
+
+        sY = 210 - ((180 * beanTemperatureProfile[i] / 300));
+        eY = 210 - ((180 * beanTemperatureProfile[i + 1] / 300));
+        M5.Lcd.drawLine(sX, sY, eX, eY, BLUE);
+        M5.Lcd.drawLine(sX, sY+1, eX, eY+1, BLUE);
+
+        sY = 210 - ((60 * fanProfile[i] / 30));
+        eY = 210 - ((60 * fanProfile[i + 1] / 30));
+        M5.Lcd.drawLine(sX, sY, eX, eY, CYAN);
+
+        sY = 210 - ((60 * rateOfRiseProfile[i] / 30));
+        eY = 210 - ((60 * rateOfRiseProfile[i + 1] / 30));
+        M5.Lcd.drawLine(sX, sY, eX, eY, ORANGE);
+      }
+
+      // Legend
+      M5.Lcd.setCursor(5, 223);
+      M5.Lcd.fillRect(0, 220, 320, 240, GRAY);
+      M5.Lcd.setTextColor(RED, GRAY);
+      M5.Lcd.setTextSize(2);
+      M5.Lcd.print("AIR T.");
+
+      M5.Lcd.setTextColor(BLUE, WHITE);
+      M5.Lcd.print(" BEAN T.");
+
+      M5.Lcd.setTextColor(CYAN, WHITE);
+      M5.Lcd.print(" FAN");
+
+      M5.Lcd.setTextColor(ORANGE, WHITE);
+      M5.Lcd.print(" AirRoR.");
+    }
   } else {
-    M5.Lcd.setTextColor(BLACK, YELLOW);
-    M5.Lcd.printf("  -    FAN   +   ");
+    if (profileRendered) {
+      M5.Lcd.fillScreen(BLACK);
+    }
+    
+    profileRendered = false;
+    M5.Lcd.setCursor(0, 0);
+    
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(CYAN, BLACK);
+    M5.Lcd.println("COOLING!!");
+    M5.Lcd.println();
+  
+    M5.Lcd.setTextColor(BLUE, BLACK);
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.printf("Bean Temperature\n");
+    M5.Lcd.setTextSize(4);
+    M5.Lcd.printf("%6.2fC\n", beanTemperature);
+    
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.setTextColor(ORANGE, BLACK);
+    M5.Lcd.printf("FC %2d:%02d @ %5.1fc\n", firstCrackMinutes, firstCrackSeconds, firstCrackTemperature);
+    M5.Lcd.setTextColor(RED, BLACK);
+    M5.Lcd.printf("END%2d:%02d @ %5.1fc\n", endMinutes, endSeconds, endTemperature);
+    float devPercentage = (endTime - firstCrackTime) * 100.0 / (firstCrackTime - startTime);
+    M5.Lcd.setTextColor(ORANGE, BLACK);
+    M5.Lcd.printf("DEV %6.2f%%\n", devPercentage);
+    
+    M5.Lcd.setTextSize(3);
+    M5.Lcd.println();
+    if (readyForReset) {
+      M5.Lcd.setTextColor(ORANGE, BLACK);
+      M5.Lcd.printf("      RESET      ");
+    } else {
+      M5.Lcd.setTextColor(BLACK, YELLOW);
+      M5.Lcd.printf("  -    FAN   +[P]");
+    }   
   }
 }
 
-
 void modbusPolling()
-{
+{ 
   // write data to buffer
-  au16data[2] = ((uint16_t) insideTemperature * 100);
-  au16data[3] = ((uint16_t) outsideTemperature * 100);
+  au16data[2] = ((uint16_t) (airTemperature * 100));
+  au16data[3] = ((uint16_t) (beanTemperature * 100));
   au16data[4] = ((uint16_t) targetTemperature);
   au16data[5] = ((uint16_t) fanLevel);
   au16data[6] = ((uint16_t) airTemperatureRateOfRise + 100.0); // offset 100
+  au16data[7] = ((uint16_t) (exhaustTemperature * 100));
   // ..
 //  au16data[9] = ((uint16_t) 0);
   au16data[10] = ((uint16_t) currentState);
-
+  // for debug
+  au16data[12] = ((uint16_t) (airTemperature1 * 100));
+  au16data[13] = ((uint16_t) (airTemperature2 * 100));
+  
   // server read buffer or write to buffer
   slave.poll(au16data, 16);
 
   targetTemperature = ((float) au16data[4]);
   fanLevel = ((int) au16data[5]);
-  airTemperatureRateOfRise = ((float) au16data[6]) - 100.0; // offset 100
+//  airTemperatureRateOfRise = ((float) au16data[6]) - 100.0; // offset 100
   // ..
   if (au16data[9] > 0) {
     float requestAirRateOfRise = ((float) au16data[9]) - 100.0;
@@ -680,6 +926,7 @@ void modbusPolling()
     
     au16data[9] = 0;
   }
+  
   
   int requestState = ((int) au16data[10]);
   if (requestState != currentState) {
@@ -771,12 +1018,16 @@ void setup() {
   // Disable WIFI and Bluetooth
   WiFi.mode(WIFI_OFF);
   btStop();
-  
+
   // (bool LCDEnable, bool SDEnable, bool SerialEnable, bool I2CEnable)
-  M5.begin(true, false, true, true);
+  M5.begin(true, false, false, true);
   M5.Speaker.mute();
-  
   M5.Lcd.fillScreen(WHITE);
+  
+  Serial.begin( 115200, SERIAL_8E1); // 115200 baud, 8-bits, even, 1-bit stop
+  slave.setTimeOut( 1000 );
+  Serial.flush();
+  slave.start();  
 
   // fan control
   ledcSetup(fanPwmChannel, fanPwmFrequency, fanDutyResolution);
@@ -799,23 +1050,36 @@ void setup() {
   Serial.print(sensors.getDeviceCount(), DEC);
   Serial.println(" devices.");
 
+  if (sensors.getDeviceCount() != 4) {
+    hasError = true;
+    Serial.println("Some thermometer not working!!!");
+  }
+
   // report parasite power requirements
   Serial.print("Parasite power is: "); 
   if (sensors.isParasitePowerMode()) Serial.println("ON");
   else Serial.println("OFF");
+
+  if (!sensors.isConnected(airThermometer1)) {
+    hasError = true;
+    Serial.println("airThermometer1 is not connected!");  
+  }
+
+  if (!sensors.isConnected(airThermometer2)) {
+    hasError = true;
+    Serial.println("airThermometer2 is not connected!");  
+  }
+
+  if (!sensors.isConnected(beanThermometer)) {
+    hasError = true;
+    Serial.println("beanThermometer is not connected!");  
+  }
+
+  if (!sensors.isConnected(exhaustThermometer)) {
+    hasError = true;
+    Serial.println("exhaustThermometer is not connected!");  
+  }
   
-  if (!sensors.getAddress(insideThermometer, 0)) { 
-    hasError = true;
-    Serial.println("Unable to find address for Device 0"); 
-    M5.Lcd.printf("T inlet ERROR!");
-  }
-  if (!sensors.getAddress(outsideThermometer, 1)) {
-    hasError = true;
-    Serial.println("Unable to find address for Device 1"); 
-    M5.Lcd.printf("T outlet ERROR!");
-  }
-
-
   // stall if error found
   if (hasError) {
     Serial.println("ERROR");
@@ -823,16 +1087,16 @@ void setup() {
     for (;;);
   }
 
-//  sensors.setResolution(insideThermometer, TEMPERATURE_PRECISION);
-//  sensors.setResolution(outsideThermometer, TEMPERATURE_PRECISION);
+//  sensors.setResolution(airThermometer1, TEMPERATURE_PRECISION);
+//  sensors.setResolution(beanThermometer, TEMPERATURE_PRECISION);
   sensors.setResolution(TEMPERATURE_PRECISION);
 
   Serial.print("Device 0 Resolution: ");
-  Serial.print(sensors.getResolution(insideThermometer), DEC); 
+  Serial.print(sensors.getResolution(airThermometer1), DEC); 
   Serial.println();
 
   Serial.print("Device 1 Resolution: ");
-  Serial.print(sensors.getResolution(outsideThermometer), DEC); 
+  Serial.print(sensors.getResolution(beanThermometer), DEC); 
   Serial.println();
   
   // start sensors reading task
@@ -862,10 +1126,7 @@ void setup() {
     1,  /* Priority of the task */
     NULL,  /* Task handle. */
     tskNO_AFFINITY); /* Core where the task should run */
-
-  // start modbus
-  slave.begin(19200); // 19200 baud, 8-bits, even, 1-bit stop
-
+  
   stateInit();
 }
 
